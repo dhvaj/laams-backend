@@ -386,7 +386,7 @@ app.post('/users', async (req, res) => {
     `;
       const userParams = [
         userId || require('crypto').randomUUID(),
-        username,
+        username || (email ? email.split('@')[0] : 'user') + '_' + Math.floor(1000 + Math.random() * 9000),
         email,
         passwordHash,
       firstName,
