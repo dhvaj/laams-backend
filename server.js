@@ -376,7 +376,9 @@ app.post('/users', async (req, res) => {
     const userId = req.body.id ? toUUID(req.body.id) : undefined;
     
     const salt = await bcrypt.genSalt(10);
-    const passwordHash = password ? await bcrypt.hash(password, salt) : 'demo-hash';
+    const passwordHash = password 
+      ? await bcrypt.hash(password, salt) 
+      : await bcrypt.hash('Welcome@123', salt);
 
     // Insert into users
     let userSql = `
@@ -448,7 +450,7 @@ app.post('/login', async (req, res) => {
     
     // Check password
     const isMatch = await bcrypt.compare(password || '', userRow.password_hash || '');
-    if (!isMatch && userRow.password_hash !== 'demo-hash') {
+    if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
     
