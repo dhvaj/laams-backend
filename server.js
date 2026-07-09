@@ -44,7 +44,12 @@ app.post('/files', upload.single('file'), (req, res) => {
 
 // --- Database Configuration ---
 const pool = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  ? new Pool({ 
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.DATABASE_URL.includes('localhost') || process.env.DATABASE_URL.includes('127.0.0.1')
+        ? false 
+        : { rejectUnauthorized: false }
+    })
   : new Pool({
       user: process.env.DB_USER || 'postgres',
       host: process.env.DB_HOST || 'localhost',
