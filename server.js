@@ -382,7 +382,7 @@ app.post('/users', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = password 
       ? await bcrypt.hash(password, salt) 
-      : null;
+      : '';
 
     // Insert into users
     let userSql = `
@@ -455,7 +455,7 @@ app.post('/login', async (req, res) => {
     const userRow = rows[0];
 
     // Onboarding password setup check for admin registered users
-    if (!userRow.password_hash) {
+    if (!userRow.password_hash || userRow.password_hash === '' || userRow.password_hash === 'UNSET') {
       return res.json({ requirePasswordSetup: true, userId: toShortID(userRow.id), email: userRow.email });
     }
     
@@ -491,7 +491,7 @@ app.post('/users/setup-password', async (req, res) => {
     }
     
     const user = checkRows[0];
-    if (user.password_hash) {
+    if (user.password_hash && user.password_hash !== '' && user.password_hash !== 'UNSET') {
       return res.status(400).json({ error: 'Password already set' });
     }
     
