@@ -23,7 +23,7 @@ async function run() {
 
     console.log('Truncating tables...');
     await pool.query('TRUNCATE users CASCADE');
-    await pool.query('TRUNCATE books CASCADE');
+    // await pool.query('TRUNCATE books CASCADE');
     await pool.query('TRUNCATE classes CASCADE');
     await pool.query('TRUNCATE study_materials CASCADE');
     await pool.query('TRUNCATE exams CASCADE');
