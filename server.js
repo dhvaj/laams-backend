@@ -321,7 +321,9 @@ app.get('/users', authenticateToken, async (req, res) => {
   try {
     let sql = `
       SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.role,
-             sp.accessibility_profile as profile_id, sp.grade_level, sp.class_id, sp.preferred_language,
+             sp.accessibility_profile as profile_id, sp.grade_level,
+             (SELECT class_id FROM class_students WHERE student_id = u.id LIMIT 1) as class_id,
+             sp.preferred_language,
              (SELECT COALESCE(json_agg(support_need), '[]'::json) FROM student_accessibility_needs WHERE student_id = u.id AND is_active = true) as support_needs,
              (SELECT COALESCE(json_agg(student_id), '[]'::json) FROM parent_student_links WHERE parent_id = u.id) as linked_student_ids
       FROM users u
@@ -335,7 +337,7 @@ app.get('/users', authenticateToken, async (req, res) => {
       params.push(req.query.role);
     }
     if (req.query.classId) {
-      conditions.push(`sp.class_id = $${params.length + 1}`);
+      conditions.push(`EXISTS (SELECT 1 FROM class_students WHERE student_id = u.id AND class_id = $${params.length + 1})`);
       params.push(toUUID(req.query.classId, 'class'));
     }
     if (conditions.length > 0) {
@@ -355,7 +357,9 @@ app.get('/users/:id', authenticateToken, async (req, res) => {
     const userId = toUUID(req.params.id);
     const sql = `
       SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.role,
-             sp.accessibility_profile as profile_id, sp.grade_level, sp.class_id, sp.preferred_language,
+             sp.accessibility_profile as profile_id, sp.grade_level,
+             (SELECT class_id FROM class_students WHERE student_id = u.id LIMIT 1) as class_id,
+             sp.preferred_language,
              (SELECT COALESCE(json_agg(support_need), '[]'::json) FROM student_accessibility_needs WHERE student_id = u.id AND is_active = true) as support_needs,
              (SELECT COALESCE(json_agg(student_id), '[]'::json) FROM parent_student_links WHERE parent_id = u.id) as linked_student_ids
       FROM users u
@@ -433,7 +437,9 @@ app.post('/login', async (req, res) => {
     // Fetch user by email
     const sql = `
       SELECT u.id, u.username, u.email, u.password_hash, u.first_name, u.last_name, u.role,
-             sp.accessibility_profile as profile_id, sp.grade_level, sp.class_id, sp.preferred_language,
+             sp.accessibility_profile as profile_id, sp.grade_level,
+             (SELECT class_id FROM class_students WHERE student_id = u.id LIMIT 1) as class_id,
+             sp.preferred_language,
              (SELECT COALESCE(json_agg(support_need), '[]'::json) FROM student_accessibility_needs WHERE student_id = u.id AND is_active = true) as support_needs,
              (SELECT COALESCE(json_agg(student_id), '[]'::json) FROM parent_student_links WHERE parent_id = u.id) as linked_student_ids
       FROM users u
