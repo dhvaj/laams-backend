@@ -382,7 +382,7 @@ app.post('/users', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const passwordHash = password 
       ? await bcrypt.hash(password, salt) 
-      : await bcrypt.hash('Welcome@123', salt);
+      : null;
 
     // Insert into users
     let userSql = `
@@ -453,6 +453,11 @@ app.post('/login', async (req, res) => {
     }
     
     const userRow = rows[0];
+
+    // Onboarding password setup check for admin registered users
+    if (!userRow.password_hash) {
+      return res.json({ requirePasswordSetup: true, userId: toShortID(userRow.id), email: userRow.email });
+    }
     
     // Check password
     const isMatch = await bcrypt.compare(password || '', userRow.password_hash || '');
@@ -465,6 +470,57 @@ app.post('/login', async (req, res) => {
     const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
     
     res.json({ user, token });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/users/setup-password', async (req, res) => {
+  try {
+    const { userId, password } = req.body;
+    if (!userId || !password) {
+      return res.status(400).json({ error: 'Missing userId or password' });
+    }
+    const uuid = toUUID(userId);
+    
+    // Check if the user exists and has no password hash set
+    const checkSql = 'SELECT id, role, password_hash FROM users WHERE id = $1';
+    const { rows: checkRows } = await pool.query(checkSql, [uuid]);
+    if (checkRows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const user = checkRows[0];
+    if (user.password_hash) {
+      return res.status(400).json({ error: 'Password already set' });
+    }
+    
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+    
+    // Update password in database
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, uuid]);
+    
+    // Fetch full user data to return
+    const sql = `
+      SELECT u.id, u.username, u.email, u.first_name, u.last_name, u.role,
+             sp.accessibility_profile as profile_id, sp.grade_level,
+             (SELECT class_id FROM class_students WHERE student_id = u.id LIMIT 1) as class_id,
+             sp.preferred_language,
+             (SELECT COALESCE(json_agg(support_need), '[]'::json) FROM student_accessibility_needs WHERE student_id = u.id AND is_active = true) as support_needs,
+             (SELECT COALESCE(json_agg(student_id), '[]'::json) FROM parent_student_links WHERE parent_id = u.id) as linked_student_ids
+      FROM users u
+      LEFT JOIN student_profiles sp ON u.id = sp.user_id
+      WHERE u.id = $1
+    `;
+    const { rows } = await pool.query(sql, [uuid]);
+    const fullUser = mapUser(rows[0]);
+    
+    // Sign token
+    const token = jwt.sign({ id: fullUser.id, role: fullUser.role }, JWT_SECRET, { expiresIn: '24h' });
+    
+    res.json({ user: fullUser, token });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
