@@ -376,8 +376,15 @@ app.get('/users/:id', authenticateToken, async (req, res) => {
 
 app.post('/users', async (req, res) => {
   try {
-    const { username, email, firstName, lastName, role, profileId, gradeLevel, classId, password } = req.body;
-    const userId = req.body.id ? toUUID(req.body.id) : undefined;
+    const { 
+      username, email, firstName, lastName, role, password, mobile, 
+      schoolName, udiseCode, apparNumber, emergencyContact, address,
+      gradeLevel, profileId, parentName, parentMobile, parentEmail, parentPassword,
+      subjectsTaught, specialization, organization, cwsnExperience, 
+      workedDisabilities, hasDisability, disabilityType 
+    } = req.body;
+    
+    const userId = req.body.id ? toUUID(req.body.id) : require('crypto').randomUUID();
     
     const salt = await bcrypt.genSalt(10);
     const passwordHash = password 
@@ -386,18 +393,24 @@ app.post('/users', async (req, res) => {
 
     // Insert into users
     let userSql = `
-      INSERT INTO users (id, username, email, password_hash, first_name, last_name, role)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO users (id, username, email, password_hash, first_name, last_name, role, mobile, school_name, udise_code, appar_number, emergency_contact, address)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `;
-      const userParams = [
-        userId || require('crypto').randomUUID(),
-        username || (email ? email.split('@')[0] : 'user') + '_' + Math.floor(1000 + Math.random() * 9000),
-        email,
-        passwordHash,
+    const userParams = [
+      userId,
+      username || (email ? email.split('@')[0] : 'user') + '_' + Math.floor(1000 + Math.random() * 9000),
+      email || `${mobile}@laams.edu`,
+      passwordHash,
       firstName,
       lastName,
-      role
+      role,
+      mobile || null,
+      schoolName || null,
+      udiseCode || null,
+      apparNumber || null,
+      emergencyContact || null,
+      address || null
     ];
     const { rows: userRows } = await pool.query(userSql, userParams);
     const user = userRows[0];
@@ -405,10 +418,59 @@ app.post('/users', async (req, res) => {
     // If student, insert profile and enroll in default classes
     if (role === 'student') {
       const profileSql = `
-        INSERT INTO student_profiles (user_id, grade_level, accessibility_profile, preferred_language)
-        VALUES ($1, $2, $3, 'en')
+        INSERT INTO student_profiles (user_id, grade_level, accessibility_profile, preferred_language, parent_name, parent_mobile, parent_email)
+        VALUES ($1, $2, $3, 'en', $4, $5, $6)
       `;
-      await pool.query(profileSql, [user.id, gradeLevel || '8', profileId || 'typical']);
+      await pool.query(profileSql, [
+        user.id, 
+        gradeLevel || '8', 
+        profileId || 'typical', 
+        parentName || null, 
+        parentMobile || null, 
+        parentEmail || null
+      ]);
+
+      // Auto-create and link parent account if credentials provided
+      if (parentMobile && parentName) {
+        try {
+          const parentId = require('crypto').randomUUID();
+          const parentEmailVal = parentEmail || `${parentMobile}@laams.edu`;
+          const parentUsername = `parent_${parentMobile}`;
+          const parentSalt = await bcrypt.genSalt(10);
+          const parentPassHash = parentPassword 
+            ? await bcrypt.hash(parentPassword, parentSalt) 
+            : await bcrypt.hash('Welcome@123', parentSalt);
+            
+          // Check if parent already exists
+          const { rows: existingParent } = await pool.query('SELECT id FROM users WHERE email = $1 OR username = $2', [parentEmailVal, parentUsername]);
+          let finalParentId = parentId;
+          if (existingParent.length > 0) {
+            finalParentId = existingParent[0].id;
+          } else {
+            await pool.query(`
+              INSERT INTO users (id, username, email, password_hash, first_name, last_name, role, mobile)
+              VALUES ($1, $2, $3, $4, $5, $6, 'parent', $7)
+            `, [
+              parentId,
+              parentUsername,
+              parentEmailVal,
+              parentPassHash,
+              parentName.split(' ')[0] || 'Parent',
+              parentName.split(' ').slice(1).join(' ') || 'Guardian',
+              parentMobile
+            ]);
+          }
+          
+          // Link student to parent
+          await pool.query(`
+            INSERT INTO parent_student_links (parent_id, student_id, relationship)
+            VALUES ($1, $2, 'Parent')
+            ON CONFLICT DO NOTHING
+          `, [finalParentId, user.id]);
+        } catch (err) {
+          console.warn('Failed to auto-create and link parent account:', err.message);
+        }
+      }
 
       // Auto-enroll student in default classes for beta testing
       try {
@@ -422,6 +484,23 @@ app.post('/users', async (req, res) => {
       } catch (err) {
         console.warn('Failed to auto-enroll new student in default classes:', err.message);
       }
+    }
+
+    // If teacher, insert profile
+    if (role === 'teacher') {
+      const teacherSql = `
+        INSERT INTO teacher_profiles (user_id, subjects_taught, specialization, cwsn_experience, worked_disabilities, has_disability, disability_type)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `;
+      await pool.query(teacherSql, [
+        user.id,
+        subjectsTaught || [],
+        specialization || null,
+        cwsnExperience === true || cwsnExperience === 'true',
+        workedDisabilities || [],
+        hasDisability === true || hasDisability === 'true',
+        disabilityType || null
+      ]);
     }
 
     res.status(201).json(mapUser(user));
