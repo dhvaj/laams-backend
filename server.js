@@ -706,6 +706,26 @@ app.post('/classes', authenticateToken, async (req, res) => {
   }
 });
 
+app.patch('/classes/:id', authenticateToken, async (req, res) => {
+  try {
+    const classId = toUUID(req.params.id, 'class');
+    const { teacherId } = req.body;
+    const sql = `
+      UPDATE classes 
+      SET teacher_id = $1 
+      WHERE id = $2 
+      RETURNING *
+    `;
+    const { rows } = await pool.query(sql, [teacherId ? toUUID(teacherId) : null, classId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ClassStudents
 app.get('/classStudents', authenticateToken, async (req, res) => {
   try {
