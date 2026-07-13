@@ -1972,7 +1972,7 @@ app.post('/studyMaterials', authenticateToken, upload.single('file'), async (req
     if (req.file) {
       const fileExt = path.extname(req.file.originalname).toLowerCase();
       const storageKey = req.file.filename;
-      const ownerId = toUUID(teacherId) || '20000000-0000-0000-0000-000000000002';
+      const ownerId = toUUID(teacherId) || '00000000-0000-0000-0000-000000000002';
       const fileSql = `
         INSERT INTO file_assets (owner_id, kind, size_bytes, mime_type, storage_key, original_filename)
         VALUES ($1, 'study_material', $2, $3, $4, $5)
@@ -2252,7 +2252,7 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
     }
 
     const storageKey = req.file.filename;
-    const ownerId = toUUID(teacherId) || '20000000-0000-0000-0000-000000000002';
+    const ownerId = toUUID(teacherId) || '00000000-0000-0000-0000-000000000002';
     const fileSql = `
       INSERT INTO file_assets (owner_id, kind, size_bytes, mime_type, storage_key, original_filename)
       VALUES ($1, 'textbook', $2, $3, $4, $5)
