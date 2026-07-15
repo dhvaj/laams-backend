@@ -2120,27 +2120,30 @@ async function extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir) {
   }
 
   const modifiedPages = [];
-  pageMatches.forEach((pageText, idx) => {
+  for (let idx = 0; idx < pageMatches.length; idx++) {
+    const pageText = pageMatches[idx];
     const pageNum = idx + 1;
     let newPageText = pageText;
     const images = pageImagesMap.get(pageNum);
     if (images && images.length > 0) {
-      images.forEach((img, imgIdx) => {
+      for (let imgIdx = 0; imgIdx < images.length; imgIdx++) {
+        const img = images[imgIdx];
         try {
           const ext = 'png';
           const uploadName = crypto.randomUUID() + '.' + ext;
           const uploadPath = path.join(uploadDir, uploadName);
-          fs.writeFileSync(uploadPath, img.data);
+          await fs.promises.writeFile(uploadPath, img.data);
           
           const newSrc = `/uploads/${uploadName}`;
           newPageText += `\n\n![Image from page ${pageNum} - Fig ${imgIdx + 1}](${newSrc})`;
         } catch (writeErr) {
           console.error('[PDF Image Extraction] Failed to write image:', writeErr);
         }
-      });
+        await new Promise(resolve => setImmediate(resolve));
+      }
     }
     modifiedPages.push(newPageText);
-  });
+  }
 
   const delimiters = rawText.match(pageDelimiterRegex) || [];
   let reconstructed = '';
@@ -2271,100 +2274,6 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
     const fileRes = await pool.query(fileSql, [ownerId, req.file.size, req.file.mimetype, storageKey, req.file.originalname]);
     fileAssetId = fileRes.rows[0].id;
     
-    let markdown = '';
-    const turndownService = new TurndownService({ headingStyle: 'atx' });
-    const skipImageExtraction = req.file.size > 5 * 1024 * 1024; // 5 MB limit
-
-    if (extname === '.docx') {
-      // Parse .docx
-      const options = skipImageExtraction ? {} : {
-          convertImage: mammoth.images.imgElement(function(image) {
-              return image.read("base64").then(function(imageBuffer) {
-                  const ext = image.contentType.split('/')[1] || 'png';
-                  const crypto = require('crypto');
-                  const filename = crypto.randomUUID() + '.' + ext;
-                  const uploadPath = path.join(uploadDir, filename);
-                  fs.writeFileSync(uploadPath, Buffer.from(imageBuffer, 'base64'));
-                  return { src: `/uploads/${filename}` };
-              });
-          })
-      };
-      const result = await mammoth.convertToHtml({ path: req.file.path }, options);
-      markdown = turndownService.turndown(result.value);
-    } else if (extname === '.epub') {
-      // Parse .epub
-      const { parseEpub } = require('@gxl/epub-parser');
-      const epubObj = await parseEpub(req.file.path, { type: 'path' });
-
-      if (!skipImageExtraction) {
-        // Add a custom rule to Turndown for images to write them to uploads!
-        turndownService.addRule('epub-images', {
-            filter: 'img',
-            replacement: function(content, node) {
-                const src = node.getAttribute('src');
-                if (!src) return '';
-                
-                try {
-                    if (src.indexOf('http://') === -1 && src.indexOf('https://') === -1 && !src.startsWith('data:')) {
-                        const absolutePath = path.resolve('/', src).substr(1);
-                        let file = null;
-                        try {
-                            file = epubObj.resolve(absolutePath);
-                        } catch (e) {
-                            try {
-                                file = epubObj.resolve(src);
-                            } catch (e2) {
-                                const filename = path.basename(src);
-                                const zipFiles = Object.keys(epubObj._zip.files);
-                                const matchingKey = zipFiles.find(k => k.endsWith(filename));
-                                if (matchingKey) {
-                                    file = epubObj._zip.files[matchingKey];
-                                }
-                            }
-                        }
-                        
-                        if (file) {
-                            const buffer = file.asNodeBuffer();
-                            const ext = path.extname(src).substring(1) || 'png';
-                            const crypto = require('crypto');
-                            const uploadName = crypto.randomUUID() + '.' + ext;
-                            const uploadPath = path.join(uploadDir, uploadName);
-                            fs.writeFileSync(uploadPath, buffer);
-                            
-                            const newSrc = `/uploads/${uploadName}`;
-                            const alt = node.getAttribute('alt') || 'Image';
-                            return `![${alt}](${newSrc})`;
-                        }
-                    }
-                } catch (err) {
-                    console.error('Failed to extract epub image:', src, err);
-                }
-                
-                const alt = node.getAttribute('alt') || 'Image';
-                return `![${alt}](${src})`;
-            }
-        });
-      }
-
-      const mdSections = [];
-      for (const section of epubObj.sections) {
-          const sectionMd = turndownService.turndown(section.htmlString || '');
-          if (sectionMd.trim()) {
-              mdSections.push(sectionMd);
-          }
-      }
-      markdown = mdSections.join('\n\n');
-    } else if (extname === '.pdf') {
-      const { PDFParse } = require('pdf-parse');
-      const dataBuffer = fs.readFileSync(req.file.path);
-      const parser = new PDFParse({ data: dataBuffer });
-      const pdfData = await parser.getText();
-      const rawText = pdfData.text || '';
-      await parser.destroy();
-      const textWithImages = skipImageExtraction ? rawText : await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
-      markdown = optimizePdfMarkdown(textWithImages, req.file.originalname);
-    }
-    
     // Create Book
     const bookSql = `
       INSERT INTO books (class_id, title, subject, uploaded_by, cover_image_url)
@@ -2374,46 +2283,167 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
     const bookRes = await pool.query(bookSql, [toUUID(classId, 'class'), title, subject, ownerId, null]);
     const book = bookRes.rows[0];
 
-      // Split by heading 1 or 2, keeping the heading using positive lookahead
-      const chunks = markdown.split(/(?=\n#{1,2}\s+)/);
-      // Remove any chunks that are empty
-      const chapters = chunks.map(c => c.trim()).filter(c => c.length > 0);
-      
-      let chapterNumber = 1;
-      for (let i = 0; i < chapters.length; i++) {
-          let chapterContent = chapters[i];
-          
-          // Append download helper note at the top of each chapter for large books
-          if (skipImageExtraction) {
-            const downloadUrl = `/uploads/${storageKey}`;
-            chapterContent = `> [!NOTE]\n> This chapter belongs to a large textbook (${(req.file.size / (1024 * 1024)).toFixed(2)} MB). You can [Download the original book file](${downloadUrl}) to view all images and media.\n\n` + chapterContent;
-          }
-
-          let chapterTitle = `Chapter ${chapterNumber}`;
-          
-          if (i === 0 && !chapters[i].startsWith('#')) {
-              chapterTitle = "Introduction";
-          } else {
-              // Extract the heading title
-              const lines = chapters[i].split('\n');
-              const headingLine = lines[0].trim();
-              // Strip '#' characters, and if it's an image link like ![](), replace with "Chapter X"
-              let extractedTitle = headingLine.replace(/^#+\s*/, '').trim();
-              if (extractedTitle.startsWith('![')) {
-                  extractedTitle = `Chapter ${chapterNumber}`;
-              }
-              chapterTitle = extractedTitle || `Chapter ${chapterNumber}`;
-          }
-          
-          const smSql = `
-            INSERT INTO study_materials (class_id, title, subject, body, uploaded_by, book_id, chapter_number)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-          `;
-          await pool.query(smSql, [toUUID(classId, 'class'), chapterTitle, subject, chapterContent, ownerId, book.id, chapterNumber]);
-          chapterNumber++;
-      }
-
+    // Respond immediately to the client to avoid Nginx or browser timeouts
     res.status(201).json(book);
+
+    // Run the parsing in the background asynchronously
+    (async () => {
+      try {
+        console.log(`[Background Parser] Starting parser for book "${title}" (${book.id})...`);
+        let markdown = '';
+        const turndownService = new TurndownService({ headingStyle: 'atx' });
+
+        if (extname === '.docx') {
+          // Parse .docx
+          const options = {
+              convertImage: mammoth.images.imgElement(function(image) {
+                  return image.read("base64").then(async function(imageBuffer) {
+                      const ext = image.contentType.split('/')[1] || 'png';
+                      const crypto = require('crypto');
+                      const filename = crypto.randomUUID() + '.' + ext;
+                      const uploadPath = path.join(uploadDir, filename);
+                      await fs.promises.writeFile(uploadPath, Buffer.from(imageBuffer, 'base64'));
+                      return { src: `/uploads/${filename}` };
+                  });
+              })
+          };
+          const result = await mammoth.convertToHtml({ path: req.file.path }, options);
+          markdown = turndownService.turndown(result.value);
+        } else if (extname === '.epub') {
+          // Parse .epub
+          const { parseEpub } = require('@gxl/epub-parser');
+          const epubObj = await parseEpub(req.file.path, { type: 'path' });
+
+          const imageMap = {};
+          
+          // Use placeholders first to prevent synchronous zip reads during turndown
+          turndownService.addRule('epub-images', {
+              filter: 'img',
+              replacement: function(content, node) {
+                  const src = node.getAttribute('src');
+                  if (!src) return '';
+                  
+                  if (src.indexOf('http://') === -1 && src.indexOf('https://') === -1 && !src.startsWith('data:')) {
+                      const imageId = `epub-img-${Math.random().toString(36).substr(2, 9)}`;
+                      imageMap[imageId] = src;
+                      const alt = node.getAttribute('alt') || 'Image';
+                      return `[${imageId}][${alt}]`;
+                  }
+                  
+                  const alt = node.getAttribute('alt') || 'Image';
+                  return `![${alt}](${src})`;
+              }
+          });
+
+          const mdSections = [];
+          for (const section of epubObj.sections) {
+              const sectionMd = turndownService.turndown(section.htmlString || '');
+              if (sectionMd.trim()) {
+                  mdSections.push(sectionMd);
+              }
+          }
+          markdown = mdSections.join('\n\n');
+
+          // Extract and save mapped images in asynchronous, non-blocking batches
+          const imageEntries = Object.entries(imageMap);
+          console.log(`[Background Parser] Extracting ${imageEntries.length} images from EPUB...`);
+          for (let k = 0; k < imageEntries.length; k++) {
+              const [imageId, src] = imageEntries[k];
+              try {
+                  const absolutePath = path.resolve('/', src).substr(1);
+                  let file = null;
+                  try {
+                      file = epubObj.resolve(absolutePath);
+                  } catch (e) {
+                      try {
+                          file = epubObj.resolve(src);
+                      } catch (e2) {
+                          const filename = path.basename(src);
+                          const zipFiles = Object.keys(epubObj._zip.files);
+                          const matchingKey = zipFiles.find(z => z.endsWith(filename));
+                          if (matchingKey) {
+                              file = epubObj._zip.files[matchingKey];
+                          }
+                      }
+                  }
+                  
+                  if (file) {
+                      const buffer = file.asNodeBuffer();
+                      const ext = path.extname(src).substring(1) || 'png';
+                      const crypto = require('crypto');
+                      const uploadName = crypto.randomUUID() + '.' + ext;
+                      const uploadPath = path.join(uploadDir, uploadName);
+                      
+                      await fs.promises.writeFile(uploadPath, buffer);
+                      const newSrc = `/uploads/${uploadName}`;
+                      
+                      const escapedId = imageId.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+                      const regex = new RegExp(`\\[${escapedId}\\]\\[([^\\]]*)\\]`, 'g');
+                      markdown = markdown.replace(regex, `![$1](${newSrc})`);
+                  }
+              } catch (imgErr) {
+                  console.error(`[Background Parser] Failed to extract image ${src}:`, imgErr);
+              }
+              // Yield execution to event loop
+              await new Promise(resolve => setImmediate(resolve));
+          }
+          
+          // Clean up any remaining placeholders
+          markdown = markdown.replace(/\[epub-img-[a-z0-9]+\]\[([^\]]*)\]/g, '');
+
+        } else if (extname === '.pdf') {
+          const { PDFParse } = require('pdf-parse');
+          const dataBuffer = fs.readFileSync(req.file.path);
+          const parser = new PDFParse({ data: dataBuffer });
+          const pdfData = await parser.getText();
+          const rawText = pdfData.text || '';
+          await parser.destroy();
+          
+          const textWithImages = await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
+          markdown = optimizePdfMarkdown(textWithImages, req.file.originalname);
+        }
+
+        // Split by heading 1 or 2, keeping the heading using positive lookahead
+        const chunks = markdown.split(/(?=\n#{1,2}\s+)/);
+        // Remove any chunks that are empty
+        const chapters = chunks.map(c => c.trim()).filter(c => c.length > 0);
+        
+        console.log(`[Background Parser] Splitting textbook "${title}" into ${chapters.length} chapters...`);
+        
+        let chapterNumber = 1;
+        for (let i = 0; i < chapters.length; i++) {
+            let chapterContent = chapters[i];
+            let chapterTitle = `Chapter ${chapterNumber}`;
+            
+            if (i === 0 && !chapters[i].startsWith('#')) {
+                chapterTitle = "Introduction";
+            } else {
+                // Extract the heading title
+                const lines = chapters[i].split('\n');
+                const headingLine = lines[0].trim();
+                // Strip '#' characters, and if it's an image link like ![](), replace with "Chapter X"
+                let extractedTitle = headingLine.replace(/^#+\s*/, '').trim();
+                if (extractedTitle.startsWith('![')) {
+                    extractedTitle = `Chapter ${chapterNumber}`;
+                }
+                chapterTitle = extractedTitle || `Chapter ${chapterNumber}`;
+            }
+            
+            const smSql = `
+              INSERT INTO study_materials (class_id, title, subject, body, uploaded_by, book_id, chapter_number, file_asset_id)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            `;
+            await pool.query(smSql, [toUUID(classId, 'class'), chapterTitle, subject, chapterContent, ownerId, book.id, chapterNumber, fileAssetId]);
+            chapterNumber++;
+            
+            // Yield execution to event loop
+            await new Promise(resolve => setImmediate(resolve));
+        }
+        console.log(`[Background Parser] Successfully parsed book "${title}" into ${chapters.length} chapters!`);
+      } catch (parseErr) {
+        console.error(`[Background Parser] Error parsing book "${title}":`, parseErr);
+      }
+    })();
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
