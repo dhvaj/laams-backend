@@ -2273,33 +2273,30 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
     
     let markdown = '';
     const turndownService = new TurndownService({ headingStyle: 'atx' });
+    const skipImageExtraction = req.file.size > 5 * 1024 * 1024; // 5 MB limit
 
-    const maxInlineSize = 5 * 1024 * 1024; // 5 MB limit
-    if (req.file.size > maxInlineSize) {
-      const downloadUrl = `/uploads/${storageKey}`;
-      markdown = `# Full Book\n\nThis is a large textbook (${(req.file.size / (1024 * 1024)).toFixed(2)} MB). You can download and read the full book file here:\n\n[Download Book File](${downloadUrl})`;
-    } else {
-      if (extname === '.docx') {
-        // Parse .docx
-        const options = {
-            convertImage: mammoth.images.imgElement(function(image) {
-                return image.read("base64").then(function(imageBuffer) {
-                    const ext = image.contentType.split('/')[1] || 'png';
-                    const crypto = require('crypto');
-                    const filename = crypto.randomUUID() + '.' + ext;
-                    const uploadPath = path.join(uploadDir, filename);
-                    fs.writeFileSync(uploadPath, Buffer.from(imageBuffer, 'base64'));
-                    return { src: `/uploads/${filename}` };
-                });
-            })
-        };
-        const result = await mammoth.convertToHtml({ path: req.file.path }, options);
-        markdown = turndownService.turndown(result.value);
-      } else if (extname === '.epub') {
-        // Parse .epub
-        const { parseEpub } = require('@gxl/epub-parser');
-        const epubObj = await parseEpub(req.file.path, { type: 'path' });
+    if (extname === '.docx') {
+      // Parse .docx
+      const options = skipImageExtraction ? {} : {
+          convertImage: mammoth.images.imgElement(function(image) {
+              return image.read("base64").then(function(imageBuffer) {
+                  const ext = image.contentType.split('/')[1] || 'png';
+                  const crypto = require('crypto');
+                  const filename = crypto.randomUUID() + '.' + ext;
+                  const uploadPath = path.join(uploadDir, filename);
+                  fs.writeFileSync(uploadPath, Buffer.from(imageBuffer, 'base64'));
+                  return { src: `/uploads/${filename}` };
+              });
+          })
+      };
+      const result = await mammoth.convertToHtml({ path: req.file.path }, options);
+      markdown = turndownService.turndown(result.value);
+    } else if (extname === '.epub') {
+      // Parse .epub
+      const { parseEpub } = require('@gxl/epub-parser');
+      const epubObj = await parseEpub(req.file.path, { type: 'path' });
 
+      if (!skipImageExtraction) {
         // Add a custom rule to Turndown for images to write them to uploads!
         turndownService.addRule('epub-images', {
             filter: 'img',
@@ -2347,25 +2344,25 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
                 return `![${alt}](${src})`;
             }
         });
-
-        const mdSections = [];
-        for (const section of epubObj.sections) {
-            const sectionMd = turndownService.turndown(section.htmlString || '');
-            if (sectionMd.trim()) {
-                mdSections.push(sectionMd);
-            }
-        }
-        markdown = mdSections.join('\n\n');
-      } else if (extname === '.pdf') {
-        const { PDFParse } = require('pdf-parse');
-        const dataBuffer = fs.readFileSync(req.file.path);
-        const parser = new PDFParse({ data: dataBuffer });
-        const pdfData = await parser.getText();
-        const rawText = pdfData.text || '';
-        await parser.destroy();
-        const textWithImages = await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
-        markdown = optimizePdfMarkdown(textWithImages, req.file.originalname);
       }
+
+      const mdSections = [];
+      for (const section of epubObj.sections) {
+          const sectionMd = turndownService.turndown(section.htmlString || '');
+          if (sectionMd.trim()) {
+              mdSections.push(sectionMd);
+          }
+      }
+      markdown = mdSections.join('\n\n');
+    } else if (extname === '.pdf') {
+      const { PDFParse } = require('pdf-parse');
+      const dataBuffer = fs.readFileSync(req.file.path);
+      const parser = new PDFParse({ data: dataBuffer });
+      const pdfData = await parser.getText();
+      const rawText = pdfData.text || '';
+      await parser.destroy();
+      const textWithImages = skipImageExtraction ? rawText : await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
+      markdown = optimizePdfMarkdown(textWithImages, req.file.originalname);
     }
     
     // Create Book
@@ -2385,13 +2382,20 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
       let chapterNumber = 1;
       for (let i = 0; i < chapters.length; i++) {
           let chapterContent = chapters[i];
+          
+          // Append download helper note at the top of each chapter for large books
+          if (skipImageExtraction) {
+            const downloadUrl = `/uploads/${storageKey}`;
+            chapterContent = `> [!NOTE]\n> This chapter belongs to a large textbook (${(req.file.size / (1024 * 1024)).toFixed(2)} MB). You can [Download the original book file](${downloadUrl}) to view all images and media.\n\n` + chapterContent;
+          }
+
           let chapterTitle = `Chapter ${chapterNumber}`;
           
-          if (i === 0 && !chapterContent.startsWith('#')) {
+          if (i === 0 && !chapters[i].startsWith('#')) {
               chapterTitle = "Introduction";
           } else {
               // Extract the heading title
-              const lines = chapterContent.split('\n');
+              const lines = chapters[i].split('\n');
               const headingLine = lines[0].trim();
               // Strip '#' characters, and if it's an image link like ![](), replace with "Chapter X"
               let extractedTitle = headingLine.replace(/^#+\s*/, '').trim();
