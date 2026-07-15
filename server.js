@@ -2085,28 +2085,28 @@ async function extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir) {
   const { PDFParse } = require('pdf-parse');
   const pageDelimiterRegex = /-- \d+ of \d+ --/g;
   const pageMatches = rawText.split(pageDelimiterRegex);
-  const totalPages = pageMatches.length;
   const crypto = require('crypto');
 
   const pageImagesMap = new Map();
-  for (let pageNum = 1; pageNum <= totalPages; pageNum++) {
-    const parser = new PDFParse({ data: dataBuffer });
-    try {
-      const promise = parser.getImage({ partial: [pageNum], imageThreshold: 50 });
-      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000));
-      const imageResult = await Promise.race([promise, timeout]);
-      
-      const pageImages = imageResult.pages.find(p => p.pageNumber === pageNum);
-      if (pageImages && pageImages.images && pageImages.images.length > 0) {
-        pageImagesMap.set(pageNum, pageImages.images);
-      }
-    } catch (err) {
-      console.warn(`[PDF Image Extraction] Page ${pageNum} skipped:`, err.message);
-    } finally {
-      try {
-        await parser.destroy();
-      } catch (e) {}
+  const parser = new PDFParse({ data: dataBuffer });
+  try {
+    const promise = parser.getImage({ imageThreshold: 50 });
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 15000));
+    const imageResult = await Promise.race([promise, timeout]);
+    
+    if (imageResult && imageResult.pages) {
+      imageResult.pages.forEach(page => {
+        if (page.images && page.images.length > 0) {
+          pageImagesMap.set(page.num, page.images);
+        }
+      });
     }
+  } catch (err) {
+    console.warn(`[PDF Image Extraction] Single pass extraction failed:`, err.message);
+  } finally {
+    try {
+      await parser.destroy();
+    } catch (e) {}
   }
 
   const modifiedPages = [];
