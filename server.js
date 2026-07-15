@@ -1981,44 +1981,54 @@ app.post('/studyMaterials', authenticateToken, upload.single('file'), async (req
       const fileRes = await pool.query(fileSql, [ownerId, req.file.size, req.file.mimetype, storageKey, req.file.originalname]);
       fileAssetId = fileRes.rows[0].id;
       
-      if (fileExt === '.docx') {
-         const options = {
-             convertImage: mammoth.images.imgElement(function(image) {
-                 return image.read("base64").then(function(imageBuffer) {
-                     const ext = image.contentType.split('/')[1] || 'png';
-                     const crypto = require('crypto');
-                     const filename = crypto.randomUUID() + '.' + ext;
-                     const uploadPath = path.join(uploadDir, filename);
-                     fs.writeFileSync(uploadPath, Buffer.from(imageBuffer, 'base64'));
-                     return {
-                         src: `/uploads/${filename}`
-                     };
-                 });
-             })
-         };
-         const result = await mammoth.convertToHtml({ path: req.file.path }, options);
-         const html = result.value;
-         const turndownService = new TurndownService({ headingStyle: 'atx' });
-         const markdown = turndownService.turndown(html);
-         // Overwrite content with extracted markdown if the content field was empty, or append if it has content
+      const maxInlineSize = 5 * 1024 * 1024; // 5 MB limit
+      if (req.file.size > maxInlineSize) {
+         const downloadUrl = `/uploads/${storageKey}`;
+         const placeholder = `This is a large document (${(req.file.size / (1024 * 1024)).toFixed(2)} MB). You can download and view the full file here: [${req.file.originalname}](${downloadUrl})`;
          if (!content.trim()) {
-           content = markdown;
+           content = placeholder;
          } else {
-           content = content + '\n\n' + markdown;
+           content = content + '\n\n' + placeholder;
          }
-      } else if (fileExt === '.pdf') {
-         const { PDFParse } = require('pdf-parse');
-         const dataBuffer = fs.readFileSync(req.file.path);
-         const parser = new PDFParse({ data: dataBuffer });
-         const pdfData = await parser.getText();
-         const rawText = pdfData.text || '';
-         await parser.destroy();
-         const textWithImages = await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
-         const cleanText = optimizePdfMarkdown(textWithImages, req.file.originalname);
-         if (!content.trim()) {
-           content = cleanText;
-         } else {
-           content = content + '\n\n' + cleanText;
+      } else {
+         if (fileExt === '.docx') {
+            const options = {
+                convertImage: mammoth.images.imgElement(function(image) {
+                    return image.read("base64").then(function(imageBuffer) {
+                        const ext = image.contentType.split('/')[1] || 'png';
+                        const crypto = require('crypto');
+                        const filename = crypto.randomUUID() + '.' + ext;
+                        const uploadPath = path.join(uploadDir, filename);
+                        fs.writeFileSync(uploadPath, Buffer.from(imageBuffer, 'base64'));
+                        return {
+                            src: `/uploads/${filename}`
+                        };
+                    });
+                })
+            };
+            const result = await mammoth.convertToHtml({ path: req.file.path }, options);
+            const html = result.value;
+            const turndownService = new TurndownService({ headingStyle: 'atx' });
+            const markdown = turndownService.turndown(html);
+            if (!content.trim()) {
+              content = markdown;
+            } else {
+              content = content + '\n\n' + markdown;
+            }
+         } else if (fileExt === '.pdf') {
+            const { PDFParse } = require('pdf-parse');
+            const dataBuffer = fs.readFileSync(req.file.path);
+            const parser = new PDFParse({ data: dataBuffer });
+            const pdfData = await parser.getText();
+            const rawText = pdfData.text || '';
+            await parser.destroy();
+            const textWithImages = await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
+            const cleanText = optimizePdfMarkdown(textWithImages, req.file.originalname);
+            if (!content.trim()) {
+              content = cleanText;
+            } else {
+              content = content + '\n\n' + cleanText;
+            }
          }
       }
     }
@@ -2264,92 +2274,98 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
     let markdown = '';
     const turndownService = new TurndownService({ headingStyle: 'atx' });
 
-    if (extname === '.docx') {
-      // Parse .docx
-      const options = {
-          convertImage: mammoth.images.imgElement(function(image) {
-              return image.read("base64").then(function(imageBuffer) {
-                  const ext = image.contentType.split('/')[1] || 'png';
-                  const crypto = require('crypto');
-                  const filename = crypto.randomUUID() + '.' + ext;
-                  const uploadPath = path.join(uploadDir, filename);
-                  fs.writeFileSync(uploadPath, Buffer.from(imageBuffer, 'base64'));
-                  return { src: `/uploads/${filename}` };
-              });
-          })
-      };
-      const result = await mammoth.convertToHtml({ path: req.file.path }, options);
-      markdown = turndownService.turndown(result.value);
-    } else if (extname === '.epub') {
-      // Parse .epub
-      const { parseEpub } = require('@gxl/epub-parser');
-      const epubObj = await parseEpub(req.file.path, { type: 'path' });
+    const maxInlineSize = 5 * 1024 * 1024; // 5 MB limit
+    if (req.file.size > maxInlineSize) {
+      const downloadUrl = `/uploads/${storageKey}`;
+      markdown = `# Full Book\n\nThis is a large textbook (${(req.file.size / (1024 * 1024)).toFixed(2)} MB). You can download and read the full book file here:\n\n[Download Book File](${downloadUrl})`;
+    } else {
+      if (extname === '.docx') {
+        // Parse .docx
+        const options = {
+            convertImage: mammoth.images.imgElement(function(image) {
+                return image.read("base64").then(function(imageBuffer) {
+                    const ext = image.contentType.split('/')[1] || 'png';
+                    const crypto = require('crypto');
+                    const filename = crypto.randomUUID() + '.' + ext;
+                    const uploadPath = path.join(uploadDir, filename);
+                    fs.writeFileSync(uploadPath, Buffer.from(imageBuffer, 'base64'));
+                    return { src: `/uploads/${filename}` };
+                });
+            })
+        };
+        const result = await mammoth.convertToHtml({ path: req.file.path }, options);
+        markdown = turndownService.turndown(result.value);
+      } else if (extname === '.epub') {
+        // Parse .epub
+        const { parseEpub } = require('@gxl/epub-parser');
+        const epubObj = await parseEpub(req.file.path, { type: 'path' });
 
-      // Add a custom rule to Turndown for images to write them to uploads!
-      turndownService.addRule('epub-images', {
-          filter: 'img',
-          replacement: function(content, node) {
-              const src = node.getAttribute('src');
-              if (!src) return '';
-              
-              try {
-                  if (src.indexOf('http://') === -1 && src.indexOf('https://') === -1 && !src.startsWith('data:')) {
-                      const absolutePath = path.resolve('/', src).substr(1);
-                      let file = null;
-                      try {
-                          file = epubObj.resolve(absolutePath);
-                      } catch (e) {
-                          try {
-                              file = epubObj.resolve(src);
-                          } catch (e2) {
-                              const filename = path.basename(src);
-                              const zipFiles = Object.keys(epubObj._zip.files);
-                              const matchingKey = zipFiles.find(k => k.endsWith(filename));
-                              if (matchingKey) {
-                                  file = epubObj._zip.files[matchingKey];
-                              }
-                          }
-                      }
-                      
-                      if (file) {
-                          const buffer = file.asNodeBuffer();
-                          const ext = path.extname(src).substring(1) || 'png';
-                          const crypto = require('crypto');
-                          const uploadName = crypto.randomUUID() + '.' + ext;
-                          const uploadPath = path.join(uploadDir, uploadName);
-                          fs.writeFileSync(uploadPath, buffer);
-                          
-                          const newSrc = `/uploads/${uploadName}`;
-                          const alt = node.getAttribute('alt') || 'Image';
-                          return `![${alt}](${newSrc})`;
-                      }
-                  }
-              } catch (err) {
-                  console.error('Failed to extract epub image:', src, err);
-              }
-              
-              const alt = node.getAttribute('alt') || 'Image';
-              return `![${alt}](${src})`;
-          }
-      });
+        // Add a custom rule to Turndown for images to write them to uploads!
+        turndownService.addRule('epub-images', {
+            filter: 'img',
+            replacement: function(content, node) {
+                const src = node.getAttribute('src');
+                if (!src) return '';
+                
+                try {
+                    if (src.indexOf('http://') === -1 && src.indexOf('https://') === -1 && !src.startsWith('data:')) {
+                        const absolutePath = path.resolve('/', src).substr(1);
+                        let file = null;
+                        try {
+                            file = epubObj.resolve(absolutePath);
+                        } catch (e) {
+                            try {
+                                file = epubObj.resolve(src);
+                            } catch (e2) {
+                                const filename = path.basename(src);
+                                const zipFiles = Object.keys(epubObj._zip.files);
+                                const matchingKey = zipFiles.find(k => k.endsWith(filename));
+                                if (matchingKey) {
+                                    file = epubObj._zip.files[matchingKey];
+                                }
+                            }
+                        }
+                        
+                        if (file) {
+                            const buffer = file.asNodeBuffer();
+                            const ext = path.extname(src).substring(1) || 'png';
+                            const crypto = require('crypto');
+                            const uploadName = crypto.randomUUID() + '.' + ext;
+                            const uploadPath = path.join(uploadDir, uploadName);
+                            fs.writeFileSync(uploadPath, buffer);
+                            
+                            const newSrc = `/uploads/${uploadName}`;
+                            const alt = node.getAttribute('alt') || 'Image';
+                            return `![${alt}](${newSrc})`;
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to extract epub image:', src, err);
+                }
+                
+                const alt = node.getAttribute('alt') || 'Image';
+                return `![${alt}](${src})`;
+            }
+        });
 
-      const mdSections = [];
-      for (const section of epubObj.sections) {
-          const sectionMd = turndownService.turndown(section.htmlString || '');
-          if (sectionMd.trim()) {
-              mdSections.push(sectionMd);
-          }
+        const mdSections = [];
+        for (const section of epubObj.sections) {
+            const sectionMd = turndownService.turndown(section.htmlString || '');
+            if (sectionMd.trim()) {
+                mdSections.push(sectionMd);
+            }
+        }
+        markdown = mdSections.join('\n\n');
+      } else if (extname === '.pdf') {
+        const { PDFParse } = require('pdf-parse');
+        const dataBuffer = fs.readFileSync(req.file.path);
+        const parser = new PDFParse({ data: dataBuffer });
+        const pdfData = await parser.getText();
+        const rawText = pdfData.text || '';
+        await parser.destroy();
+        const textWithImages = await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
+        markdown = optimizePdfMarkdown(textWithImages, req.file.originalname);
       }
-      markdown = mdSections.join('\n\n');
-    } else if (extname === '.pdf') {
-      const { PDFParse } = require('pdf-parse');
-      const dataBuffer = fs.readFileSync(req.file.path);
-      const parser = new PDFParse({ data: dataBuffer });
-      const pdfData = await parser.getText();
-      const rawText = pdfData.text || '';
-      await parser.destroy();
-      const textWithImages = await extractAndEmbedPdfImages(dataBuffer, rawText, uploadDir);
-      markdown = optimizePdfMarkdown(textWithImages, req.file.originalname);
     }
     
     // Create Book
