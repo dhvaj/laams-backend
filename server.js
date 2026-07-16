@@ -132,6 +132,8 @@ async function translateNode(text, targetLang) {
     console.error('Node translation fallback failed:', err.message);
     return text;
   }
+}
+
 function mapAccessibilityProfile(profileId) {
   if (!profileId) return 'typical';
   const profileMap = {
