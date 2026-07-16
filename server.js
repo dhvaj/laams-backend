@@ -58,6 +58,26 @@ const pool = process.env.DATABASE_URL
       port: parseInt(process.env.DB_PORT || '5432', 10),
     });
 
+// Database startup check and schema self-healing migration
+(async () => {
+  try {
+    console.log('Verifying database connection and schema...');
+    const checkEnumSql = `
+      SELECT 1 FROM pg_enum 
+      WHERE enumtypid = 'accessibility_profile'::regtype 
+      AND enumlabel = 'learning'
+    `;
+    const { rows } = await pool.query(checkEnumSql);
+    if (rows.length === 0) {
+      console.log('Adding "learning" value to accessibility_profile enum...');
+      await pool.query("ALTER TYPE accessibility_profile ADD VALUE 'learning'");
+      console.log('"learning" value successfully added to enum!');
+    }
+  } catch (err) {
+    console.error('Database migration/connection check failed:', err.message);
+  }
+})();
+
 // --- ID Mapping Helpers ---
 const ID_MAP = {
   "1": "00000000-0000-0000-0000-000000000001",
@@ -144,7 +164,7 @@ function mapAccessibilityProfile(profileId) {
     'id': 'id',
     'asd': 'adhd-autism',
     'adhd-autism': 'adhd-autism',
-    'learning': 'dyslexic',
+    'learning': 'learning',
     'dyslexic': 'dyslexic',
     'dysgraphia': 'dyslexic',
     'dyscalculia': 'dyslexic'
@@ -167,7 +187,7 @@ async function fallbackAdaptation(lesson, profile, lang) {
     const translatedP = await translateNode(p, lang);
     const sentences = translatedP.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 0);
 
-    if (profile === 'dyslexic') {
+    if (profile === 'dyslexic' || profile === 'learning') {
       blocks.push({
         id: `dyslexic-block-${blockIdx++}`,
         type: 'bullets',
