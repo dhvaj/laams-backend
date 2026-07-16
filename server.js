@@ -385,7 +385,38 @@ app.post('/users', async (req, res) => {
     } = req.body;
     
     const userId = req.body.id ? toUUID(req.body.id) : require('crypto').randomUUID();
-    
+
+    // Check if email already exists
+    if (email) {
+      const { rows: emailCheck } = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+      if (emailCheck.length > 0) {
+        return res.status(400).json({ error: 'Email address is already registered' });
+      }
+    }
+
+    // Check if mobile already exists
+    if (mobile) {
+      const { rows: mobileCheck } = await pool.query('SELECT id FROM users WHERE mobile = $1', [mobile]);
+      if (mobileCheck.length > 0) {
+        return res.status(400).json({ error: 'Mobile number is already registered' });
+      }
+    }
+
+    // Resolve unique username
+    const baseUsername = username || (email ? email.split('@')[0] : 'user');
+    let finalUsername = baseUsername;
+    let isUnique = false;
+    let attempts = 0;
+    while (!isUnique && attempts < 15) {
+      const { rows: existingUsernames } = await pool.query('SELECT id FROM users WHERE username = $1', [finalUsername]);
+      if (existingUsernames.length === 0) {
+        isUnique = true;
+      } else {
+        attempts++;
+        finalUsername = `${baseUsername}_${Math.floor(1000 + Math.random() * 9000)}`;
+      }
+    }
+
     const salt = await bcrypt.genSalt(10);
     const passwordHash = password 
       ? await bcrypt.hash(password, salt) 
@@ -399,7 +430,7 @@ app.post('/users', async (req, res) => {
     `;
     const userParams = [
       userId,
-      username || (email ? email.split('@')[0] : 'user') + '_' + Math.floor(1000 + Math.random() * 9000),
+      finalUsername,
       email || `${mobile}@laams.edu`,
       passwordHash,
       firstName,
