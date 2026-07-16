@@ -132,6 +132,22 @@ async function translateNode(text, targetLang) {
     console.error('Node translation fallback failed:', err.message);
     return text;
   }
+function mapAccessibilityProfile(profileId) {
+  if (!profileId) return 'typical';
+  const profileMap = {
+    'typical': 'typical',
+    'blind': 'blind',
+    'low-vision': 'low-vision',
+    'deaf': 'deaf',
+    'id': 'id',
+    'asd': 'adhd-autism',
+    'adhd-autism': 'adhd-autism',
+    'learning': 'dyslexic',
+    'dyslexic': 'dyslexic',
+    'dysgraphia': 'dyslexic',
+    'dyscalculia': 'dyslexic'
+  };
+  return profileMap[profileId] || 'typical';
 }
 
 async function fallbackAdaptation(lesson, profile, lang) {
@@ -455,7 +471,7 @@ app.post('/users', async (req, res) => {
       await pool.query(profileSql, [
         user.id, 
         gradeLevel || '8', 
-        profileId || 'typical', 
+        mapAccessibilityProfile(profileId), 
         parentName || null, 
         parentMobile || null, 
         parentEmail || null
@@ -666,7 +682,7 @@ app.patch('/users/:id', authenticateToken, async (req, res) => {
       let params = [userId];
       if (profileId) {
         updates.push(`accessibility_profile = $${params.length + 1}`);
-        params.push(profileId);
+        params.push(mapAccessibilityProfile(profileId));
       }
       if (gradeLevel) {
         updates.push(`grade_level = $${params.length + 1}`);
