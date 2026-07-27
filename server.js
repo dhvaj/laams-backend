@@ -204,7 +204,7 @@ async function fallbackAdaptation(lesson, profile, lang) {
           text: s
         });
       }
-    } else if (profile === 'intellectual-disability') {
+    } else if (profile === 'id') {
       let factNum = 1;
       for (const s of sentences) {
         blocks.push({
