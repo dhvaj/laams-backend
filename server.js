@@ -2328,9 +2328,48 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
        return res.status(400).json({ error: 'No file uploaded.' });
     }
 
-    const extname = path.extname(req.file.originalname).toLowerCase();
-    if (extname !== '.docx' && extname !== '.epub' && extname !== '.pdf') {
-       return res.status(400).json({ error: 'Only .docx, .epub, and .pdf files are supported for Books.' });
+    let extname = path.extname(req.file.originalname).toLowerCase();
+    if (extname !== '.docx' && extname !== '.epub' && extname !== '.pdf' && extname !== '.zip') {
+       return res.status(400).json({ error: 'Only .docx, .epub, .pdf, and .zip files are supported for Books.' });
+    }
+
+    if (extname === '.zip') {
+      try {
+        const JSZip = require('jszip');
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const zip = await JSZip.loadAsync(fileBuffer);
+        
+        if (zip.file('[Content_Types].xml') || zip.file('word/document.xml')) {
+          console.log('[Zip Handler] Detected renamed .docx file.');
+          extname = '.docx';
+        } else {
+          const supportedFileKey = Object.keys(zip.files).find(key => {
+            const lowerKey = key.toLowerCase();
+            return !zip.files[key].dir && (lowerKey.endsWith('.docx') || lowerKey.endsWith('.epub') || lowerKey.endsWith('.pdf'));
+          });
+          
+          if (supportedFileKey) {
+            console.log(`[Zip Handler] Extracting "${supportedFileKey}" from uploaded zip.`);
+            const extractedBuffer = await zip.files[supportedFileKey].async('nodebuffer');
+            const extractedExt = path.extname(supportedFileKey).toLowerCase();
+            
+            // Overwrite req.file.path with the extracted file
+            const tempName = `${Date.now()}-${path.basename(supportedFileKey)}`;
+            const tempPath = path.join(path.dirname(req.file.path), tempName);
+            fs.writeFileSync(tempPath, extractedBuffer);
+            
+            // Update req.file details
+            req.file.path = tempPath;
+            req.file.originalname = supportedFileKey;
+            extname = extractedExt;
+          } else {
+            return res.status(400).json({ error: 'Uploaded zip archive does not contain any supported .docx, .epub, or .pdf files.' });
+          }
+        }
+      } catch (zipErr) {
+        console.error('[Zip Handler] Failed to process zip file:', zipErr);
+        return res.status(400).json({ error: 'Failed to process uploaded zip file.' });
+      }
     }
 
     const storageKey = req.file.filename;
