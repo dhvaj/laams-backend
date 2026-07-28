@@ -2331,6 +2331,14 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
         if (zip.file('[Content_Types].xml') || zip.file('word/document.xml')) {
           console.log('[Zip Handler] Detected renamed .docx file.');
           extname = '.docx';
+          
+          const tempName = req.file.filename.replace(/\.zip$/i, '.docx');
+          const tempPath = path.join(path.dirname(req.file.path), tempName);
+          fs.renameSync(req.file.path, tempPath);
+          
+          req.file.path = tempPath;
+          req.file.filename = tempName;
+          req.file.originalname = req.file.originalname.replace(/\.zip$/i, '.docx');
         } else {
           const supportedFileKey = Object.keys(zip.files).find(key => {
             const lowerKey = key.toLowerCase();
@@ -2349,7 +2357,9 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
             
             // Update req.file details
             req.file.path = tempPath;
+            req.file.filename = tempName;
             req.file.originalname = supportedFileKey;
+            req.file.size = extractedBuffer.length;
             extname = extractedExt;
           } else {
             return res.status(400).json({ error: 'Uploaded zip archive does not contain any supported .docx, .epub, or .pdf files.' });
