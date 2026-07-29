@@ -428,7 +428,7 @@ app.post('/users', async (req, res) => {
       schoolName, udiseCode, apparNumber, emergencyContact, address,
       gradeLevel, profileId, parentName, parentMobile, parentEmail, parentPassword,
       subjectsTaught, specialization, organization, cwsnExperience, 
-      workedDisabilities, hasDisability, disabilityType 
+      workedDisabilities, hasDisability, disabilityType, preferredLanguage
     } = req.body;
     
     const userId = req.body.id ? toUUID(req.body.id) : require('crypto').randomUUID();
@@ -497,12 +497,13 @@ app.post('/users', async (req, res) => {
     if (role === 'student') {
       const profileSql = `
         INSERT INTO student_profiles (user_id, grade_level, accessibility_profile, preferred_language, parent_name, parent_mobile, parent_email)
-        VALUES ($1, $2, $3, 'en', $4, $5, $6)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `;
       await pool.query(profileSql, [
         user.id, 
         gradeLevel || '8', 
         mapAccessibilityProfile(profileId), 
+        preferredLanguage || 'en',
         parentName || null, 
         parentMobile || null, 
         parentEmail || null
