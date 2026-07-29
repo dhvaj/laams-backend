@@ -187,9 +187,9 @@ async function fallbackAdaptation(lesson, profile, lang) {
     const translatedP = await translateNode(p, lang);
     const sentences = translatedP.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 0);
 
-    if (profile === 'dyslexic' || profile === 'learning' || profile === 'low-vision') {
+    if (profile === 'dyslexic' || profile === 'learning') {
       blocks.push({
-        id: `${profile}-block-${blockIdx++}`,
+        id: `dyslexic-block-${blockIdx++}`,
         type: 'bullets',
         heading: await translateNode('Key Facts', lang),
         items: sentences
@@ -230,6 +230,17 @@ async function fallbackAdaptation(lesson, profile, lang) {
       });
       blocks.push({
         id: `blind-text-${blockIdx++}`,
+        type: 'text',
+        text: translatedP
+      });
+    } else if (profile === 'low-vision') {
+      blocks.push({
+        id: `lv-heading-${blockIdx++}`,
+        type: 'heading',
+        text: await translateNode('Overview', lang)
+      });
+      blocks.push({
+        id: `lv-text-${blockIdx++}`,
         type: 'text',
         text: translatedP
       });
