@@ -73,6 +73,15 @@ const pool = process.env.DATABASE_URL
       await pool.query("ALTER TYPE accessibility_profile ADD VALUE 'learning'");
       console.log('"learning" value successfully added to enum!');
     }
+    
+    // Drop foreign key constraints on lesson_activity and analytics_events to support study_materials progress tracking
+    try {
+      await pool.query('ALTER TABLE lesson_activity DROP CONSTRAINT IF EXISTS lesson_activity_lesson_id_fkey');
+      await pool.query('ALTER TABLE analytics_events DROP CONSTRAINT IF EXISTS analytics_events_lesson_id_fkey');
+      console.log('Successfully dropped foreign key constraints on lesson_activity and analytics_events tables.');
+    } catch (constraintErr) {
+      console.warn('Failed to drop constraints (they might be already dropped):', constraintErr.message);
+    }
   } catch (err) {
     console.error('Database migration/connection check failed:', err.message);
   }
@@ -1902,23 +1911,36 @@ app.post('/api/analytics/track', authenticateToken, async (req, res) => {
     const { lessonId, eventType, eventValue, metadata } = req.body;
     
     let lId = lessonId ? toUUID(lessonId) : null;
+    let isStudyMaterial = false;
     if (lId) {
       const lessonCheck = await pool.query('SELECT id FROM lessons WHERE id = $1', [lId]);
       if (lessonCheck.rows.length === 0) {
-        lId = null;
+        const materialCheck = await pool.query('SELECT id FROM study_materials WHERE id = $1', [lId]);
+        if (materialCheck.rows.length > 0) {
+          isStudyMaterial = true;
+        } else {
+          lId = null;
+        }
       }
     }
     
     let classId = null;
     if (lId) {
-      const classRes = await pool.query(`
-        SELECT cs.class_id 
-        FROM class_students cs 
-        JOIN lessons l ON cs.student_id = $1 
-        WHERE l.id = $2 LIMIT 1
-      `, [studentId, lId]);
-      if (classRes.rows.length > 0) {
-        classId = classRes.rows[0].class_id;
+      if (isStudyMaterial) {
+        const classRes = await pool.query('SELECT class_id FROM study_materials WHERE id = $1', [lId]);
+        if (classRes.rows.length > 0) {
+          classId = classRes.rows[0].class_id;
+        }
+      } else {
+        const classRes = await pool.query(`
+          SELECT cs.class_id 
+          FROM class_students cs 
+          JOIN lessons l ON cs.student_id = $1 
+          WHERE l.id = $2 LIMIT 1
+        `, [studentId, lId]);
+        if (classRes.rows.length > 0) {
+          classId = classRes.rows[0].class_id;
+        }
       }
     }
     
@@ -1950,11 +1972,32 @@ app.post('/api/analytics/track', authenticateToken, async (req, res) => {
         `, [lId, studentId, profile, timeSpent, downloads]);
       }
 
-      const subjectRes = await pool.query('SELECT subject_id FROM lessons WHERE id = $1', [lId]);
-      if (subjectRes.rows.length > 0) {
-        const subjectId = subjectRes.rows[0].subject_id;
-        
-        const totalDlRes = await pool.query('SELECT COALESCE(SUM(downloads_count), 0) as dl FROM lesson_activity WHERE student_id = $1 AND lesson_id IN (SELECT id FROM lessons WHERE subject_id = $2)', [studentId, subjectId]);
+      let subjectId = null;
+      if (isStudyMaterial) {
+        const smRes = await pool.query('SELECT subject FROM study_materials WHERE id = $1', [lId]);
+        if (smRes.rows.length > 0) {
+          const subRes = await pool.query('SELECT id FROM subjects WHERE LOWER(name) = LOWER($1) LIMIT 1', [smRes.rows[0].subject]);
+          if (subRes.rows.length > 0) {
+            subjectId = subRes.rows[0].id;
+          }
+        }
+      } else {
+        const subjectRes = await pool.query('SELECT subject_id FROM lessons WHERE id = $1', [lId]);
+        if (subjectRes.rows.length > 0) {
+          subjectId = subjectRes.rows[0].subject_id;
+        }
+      }
+      
+      if (subjectId) {
+        const totalDlRes = await pool.query(`
+          SELECT COALESCE(SUM(downloads_count), 0) as dl 
+          FROM lesson_activity 
+          WHERE student_id = $1 
+            AND (
+              lesson_id IN (SELECT id FROM lessons WHERE subject_id = $2)
+              OR lesson_id IN (SELECT id FROM study_materials WHERE LOWER(subject) = (SELECT LOWER(name) FROM subjects WHERE id = $2))
+            )
+        `, [studentId, subjectId]);
         const downloadsCount = parseInt(totalDlRes.rows[0].dl, 10);
         
         const completedAssignRes = await pool.query('SELECT COUNT(*) as count FROM assignment_submissions s JOIN assignments a ON s.assignment_id = a.id WHERE s.student_id = $1 AND a.subject = (SELECT name FROM subjects WHERE id = $2) AND s.status = \'Submitted\'', [studentId, subjectId]);
