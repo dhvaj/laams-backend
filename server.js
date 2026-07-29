@@ -2018,15 +2018,22 @@ app.get('/studyMaterials', authenticateToken, async (req, res) => {
       FROM study_materials m
       LEFT JOIN file_assets f ON m.file_asset_id = f.id
     `);
-    res.json(rows.map(m => ({
-      id: toShortID(m.id),
-      classId: toShortID(m.class_id),
-      title: m.title,
-      subject: m.subject,
-      body: m.body,
-      mongodbContentId: m.mongodb_content_id,
-      fileUrl: m.file_url ? `/uploads/${m.file_url}` : null
-    })));
+    res.json(rows.map(m => {
+      let formattedTitle = m.title;
+      if (m.chapter_number && !m.title.toLowerCase().startsWith('chapter') && !m.title.toLowerCase().startsWith('introduction')) {
+        formattedTitle = `Chapter ${m.chapter_number}: ${m.title}`;
+      }
+      return {
+        id: toShortID(m.id),
+        classId: toShortID(m.class_id),
+        title: formattedTitle,
+        subject: m.subject,
+        body: m.body,
+        chapterNumber: m.chapter_number,
+        mongodbContentId: m.mongodb_content_id,
+        fileUrl: m.file_url ? `/uploads/${m.file_url}` : null
+      };
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -2536,15 +2543,20 @@ app.post('/books', authenticateToken, upload.single('file'), async (req, res) =>
             if (i === 0 && !chapters[i].startsWith('#')) {
                 chapterTitle = "Introduction";
             } else {
-                // Extract the heading title
-                const lines = chapters[i].split('\n');
-                const headingLine = lines[0].trim();
-                // Strip '#' characters, and if it's an image link like ![](), replace with "Chapter X"
-                let extractedTitle = headingLine.replace(/^#+\s*/, '').trim();
-                if (extractedTitle.startsWith('![')) {
-                    extractedTitle = `Chapter ${chapterNumber}`;
+                // Extract the heading title (checking first and second line to catch split titles like "Chapter 17 \n Quadratic Equations")
+                const lines = chapters[i].split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                let firstLine = lines[0] ? lines[0].replace(/^#+\s*/, '').trim() : '';
+                let secondLine = lines[1] ? lines[1].replace(/^#+\s*/, '').trim() : '';
+                
+                if (/^chapter\s+\d+\.?$/i.test(firstLine) && secondLine && !secondLine.startsWith('![')) {
+                    chapterTitle = `${firstLine}: ${secondLine}`;
+                } else {
+                    chapterTitle = firstLine || `Chapter ${chapterNumber}`;
                 }
-                chapterTitle = extractedTitle || `Chapter ${chapterNumber}`;
+                
+                if (chapterTitle.startsWith('![')) {
+                    chapterTitle = `Chapter ${chapterNumber}`;
+                }
             }
             
             const smSql = `
@@ -2581,7 +2593,19 @@ app.get('/books/:id/chapters', authenticateToken, async (req, res) => {
   try {
     let sql = `SELECT * FROM study_materials WHERE book_id = $1 ORDER BY chapter_number ASC`;
     const { rows } = await pool.query(sql, [req.params.id]);
-    res.json(rows);
+    res.json(rows.map(row => {
+      let formattedTitle = row.title;
+      if (row.chapter_number && !row.title.toLowerCase().startsWith('chapter') && !row.title.toLowerCase().startsWith('introduction')) {
+        formattedTitle = `Chapter ${row.chapter_number}: ${row.title}`;
+      }
+      return {
+        ...row,
+        id: toShortID(row.id),
+        bookId: toShortID(row.book_id),
+        classId: toShortID(row.class_id),
+        title: formattedTitle
+      };
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
