@@ -2285,14 +2285,17 @@ function optimizePdfMarkdown(rawText, filename) {
   pageMatches.forEach((pageText, idx) => {
     const pageNum = idx + 1;
     
-    // Check if this page contains garbled text.
-    // Garbled text in this EVS textbook contains characters like ¶, §, •, œ, ü, ≤, etc.
+    // Check if this page contains garbled text using density checking so bullets and section headings aren't dropped
     const garbledRegex = /[¶§•œü≤ÃâÁ™Õßµ†‡ˆ˜¯˘˙˚¸˝˛]/g;
     const garbledCount = (pageText.match(garbledRegex) || []).length;
     
-    if (garbledCount > 5) {
-      console.log(`Skipping garbled page ${pageNum} (garbled characters count: ${garbledCount})`);
-      return;
+    const cleanPageText = pageText.trim();
+    if (cleanPageText.length > 50) {
+      const ratio = garbledCount / cleanPageText.length;
+      if (ratio > 0.15) {
+        console.log(`Skipping garbled page ${pageNum} (garbled ratio: ${(ratio * 100).toFixed(1)}%)`);
+        return;
+      }
     }
     
     // Remove lines that are page headers like "Class - 3 : Our Wonderful World \d+"
@@ -2314,21 +2317,31 @@ function optimizePdfMarkdown(rawText, filename) {
   // Format headings
   // Merge "Lesson\n\d+" into "Lesson \d+"
   combinedText = combinedText.replace(/Lesson\s*\n\s*(\d+)/gi, 'Lesson $1');
+  // Merge "Chapter\n\d+" into "Chapter \d+"
+  combinedText = combinedText.replace(/Chapter\s*\n\s*(\d+)/gi, 'Chapter $1');
   
   let lines = combinedText.split('\n');
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     
-    // Check for Lesson header
-    if (/^Lesson\s+\d+/i.test(line)) {
-      // Look for FAMILY or title in preceding lines
-      let title = 'Family';
+    // Check for Lesson, Chapter, or Unit header dynamically (without hardcoding 'Lesson 1')
+    const chapterMatch = line.match(/^(Lesson|Chapter|Unit)\s+(\d+)/i);
+    const numericHeaderMatch = line.match(/^(\d+)\.\s+([A-Za-z\s]+.*)/);
+    
+    if (chapterMatch) {
+      const type = chapterMatch[1];
+      const num = chapterMatch[2];
+      let title = 'Chapter';
       if (i > 0 && lines[i-1].trim()) {
         title = lines[i-1].trim();
         lines[i-1] = ''; // clear it so we don't duplicate
       }
-      lines[i] = `\n# Lesson 1: ${title}\n`;
+      lines[i] = `\n# ${type} ${num}: ${title}\n`;
+    } else if (numericHeaderMatch && line.length < 80) {
+      const num = numericHeaderMatch[1];
+      const title = numericHeaderMatch[2].trim();
+      lines[i] = `\n# Chapter ${num}: ${title}\n`;
     }
     
     // Check for other standard headings
